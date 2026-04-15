@@ -1,14 +1,13 @@
 'use strict';
 
 /* ============================================================
-   DRIVEEASE — app.js  (Production Ready — All Bugs Fixed)
-   Fixes:
-   - Vendor can now add unlimited vehicles (image/state reset fixed)
-   - upImgs, imgCounter, insDoc properly reset after each vehicle submission
-   - licFront/licBack properly scoped and reset
-   - All JS errors resolved
-   - Booking details fully shown after booking
-   - Hover popup only on booking cards
+   DRIVEEASE — app.js  (Bug Fixed: Vehicle Image Upload)
+   Key Fix:
+   - upImgs now stores plain base64 strings (not {key,data} objects)
+   - addVehicle() saves images as string array → vehicleCardHtml works
+   - removeImg now works with index-based approach
+   - imgPrevs rendered with data-index for reliable removal
+   - All other original bugs remain fixed
    ============================================================ */
 
 /* ── LOCALSTORAGE STORE ── */
@@ -55,11 +54,18 @@ function initStore() {
 }
 
 /* ── APP STATE ── */
-var CU = null;   // current user object
-var CR = null;   // current role: 'user' | 'vendor' | 'admin'
-var BT = null;   // booking target vehicle
-var licFront = null, licBack = null, insDoc = null, upImgs = [];
-var typeFilter = '', imgCounter = 0, adminVehicleFilter = 'all';
+var CU = null;
+var CR = null;
+var BT = null;
+var licFront = null, licBack = null, insDoc = null;
+
+/*
+ * FIX: upImgs is now a plain array of base64 strings (not {key,data} objects).
+ * This is the root cause of the "default image" bug — images were stored as
+ * objects, but vehicleCardHtml reads v.images[0] as a string for the <img src>.
+ */
+var upImgs = [];
+var typeFilter = '', adminVehicleFilter = 'all';
 
 /* ── HELPERS ── */
 function filterKey(arr, k, v) {
@@ -261,7 +267,8 @@ function adminLogin() {
 /* ── AUTH: SIGN OUT ── */
 function signOut() {
   CU = null; CR = null;
-  licFront = null; licBack = null; insDoc = null; upImgs = []; imgCounter = 0;
+  licFront = null; licBack = null; insDoc = null;
+  upImgs = [];
   Store.del('session');
   showToast('Signed out successfully', 'inf');
   updateNav(); showPage('home');
@@ -352,9 +359,28 @@ function renderTrending() {
   );
 }
 
+/* ──────────────────────────────────────────
+   FIX: getVehicleImage helper
+   Safely extracts the first image string from
+   a vehicle, handling both legacy {key,data}
+   objects AND plain strings.
+────────────────────────────────────────── */
+function getVehicleImage(v) {
+  var fallback = 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=600&h=400&fit=crop';
+  if (!v.images || !v.images.length) return fallback;
+  var first = v.images[0];
+  if (!first) return fallback;
+  /* If stored as {key, data} object (legacy bug), extract .data */
+  if (typeof first === 'object' && first.data) return first.data;
+  /* If it's a plain string (correct path) */
+  if (typeof first === 'string') return first;
+  return fallback;
+}
+
 /* ── VEHICLE CARD HTML ── */
 function vehicleCardHtml(v, isTrending) {
-  var img = (v.images && v.images.length) ? v.images[0] : 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=600&h=400&fit=crop';
+  /* FIX: use getVehicleImage() instead of direct array access */
+  var img = getVehicleImage(v);
   var isUser = CU && CR === 'user';
   return '<div class="vcard" onclick="openDetail(\'' + v.id + '\')">' +
     '<div class="vcard-img">' +
@@ -422,10 +448,23 @@ function filterVehicles() {
 function openDetail(id) {
   var v = (Store.get('vehicles') || []).find(function(x) { return x.id === id; });
   if (!v) return;
-  var imgs = (v.images && v.images.length) ? v.images : ['https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=600&h=400&fit=crop'];
+
+  /* FIX: Use getVehicleImage for main image, and map all images correctly */
+  var mainImg = getVehicleImage(v);
+
+  /* FIX: Normalize all images to strings for gallery */
+  var allImgs = (v.images || []).map(function(img) {
+    if (!img) return null;
+    if (typeof img === 'object' && img.data) return img.data;
+    if (typeof img === 'string') return img;
+    return null;
+  }).filter(Boolean);
+
+  if (!allImgs.length) allImgs = [mainImg];
+
   var isUser = CU && CR === 'user';
-  var galHtml = imgs.length > 1
-    ? '<div class="gal">' + imgs.slice(1, 5).map(function(i) {
+  var galHtml = allImgs.length > 1
+    ? '<div class="gal">' + allImgs.slice(1, 5).map(function(i) {
         return '<img src="' + i + '" class="gthumb" onclick="document.getElementById(\'detMain\').src=this.src" loading="lazy"/>';
       }).join('') + '</div>'
     : '';
@@ -439,7 +478,7 @@ function openDetail(id) {
         '<span class="sbadge s-approved" style="text-transform:capitalize">' + v.type + '</span>' +
         (v.insurance ? '<span class="sbadge s-approved"><i class="fas fa-shield-alt"></i> Insured</span>' : '') +
       '</div>' +
-      '<img id="detMain" src="' + imgs[0] + '" style="width:100%;height:360px;object-fit:cover;border-radius:16px;margin-bottom:12px" onerror="this.src=\'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=600&h=400&fit=crop\'"/>' +
+      '<img id="detMain" src="' + mainImg + '" style="width:100%;height:360px;object-fit:cover;border-radius:16px;margin-bottom:12px" onerror="this.src=\'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=600&h=400&fit=crop\'"/>' +
       galHtml +
       '<div class="row g-3 my-3">' +
         '<div class="col-4"><div style="background:var(--bg3);padding:16px;border-radius:12px;text-align:center;border:1px solid var(--border)"><div style="color:var(--text3);font-size:.68rem;margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">PRICE/DAY</div><div style="color:var(--accent);font-size:1.5rem;font-weight:700;font-family:\'Space Mono\',monospace">₹' + v.price.toLocaleString() + '</div></div></div>' +
@@ -528,7 +567,7 @@ function confirmBooking() {
     vehicleId: BT.id,
     vehicleName: BT.name,
     vehicleType: BT.type,
-    vehicleImg: (BT.images && BT.images[0]) || '',
+    vehicleImg: getVehicleImage(BT),
     vehiclePrice: BT.price,
     vendorId: BT.vendorId,
     vendorName: BT.vendorName || '',
@@ -960,8 +999,15 @@ function loadAdminVehicles(filter) {
   if (filter && filter !== 'all') vs = vs.filter(function(v) { return v.status === filter; });
   if (!vs.length) { $('#aVehiclesList').html(emptyHtml('fa-car-side', 'No vehicles found.')); return; }
   var rows = vs.map(function(v) {
+    /* FIX: use getVehicleImage in admin table thumbnail */
+    var thumb = getVehicleImage(v);
     return '<tr>' +
-      '<td><strong>' + v.name + '</strong></td>' +
+      '<td>' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+          '<img src="' + thumb + '" style="width:50px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--border)" onerror="this.style.display=\'none\'"/>' +
+          '<strong>' + v.name + '</strong>' +
+        '</div>' +
+      '</td>' +
       '<td><span class="sbadge s-approved" style="text-transform:capitalize">' + v.type + '</span></td>' +
       '<td>₹' + v.price.toLocaleString() + '</td>' +
       '<td>' + v.vendorName + '</td>' +
@@ -975,7 +1021,7 @@ function loadAdminVehicles(filter) {
     '</tr>';
   }).join('');
   $('#aVehiclesList').html(
-    '<table class="dtable"><thead><tr><th>Name</th><th>Type</th><th>Price/day</th><th>Vendor</th><th>Insurance</th><th>Status</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>'
+    '<table class="dtable"><thead><tr><th>Vehicle</th><th>Type</th><th>Price/day</th><th>Vendor</th><th>Insurance</th><th>Status</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>'
   );
 }
 function approveVehicle(id) {
@@ -1121,8 +1167,15 @@ function loadVendorVehicles() {
   var vs = (Store.get('vehicles') || []).filter(function(v) { return v.vendorId === CU.id; });
   if (!vs.length) { $('#vVehiclesList').html(emptyHtml('fa-car-side', 'No vehicles added yet. Use the Add Vehicle tab.')); return; }
   var rows = sortByFn(vs, function(a, b) { return a.name.localeCompare(b.name); }).map(function(v) {
+    /* FIX: show actual uploaded image thumbnail in vendor table */
+    var thumb = getVehicleImage(v);
     return '<tr>' +
-      '<td><strong>' + v.name + '</strong></td>' +
+      '<td>' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+          '<img src="' + thumb + '" style="width:50px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--border)" onerror="this.style.display=\'none\'"/>' +
+          '<strong>' + v.name + '</strong>' +
+        '</div>' +
+      '</td>' +
       '<td style="text-transform:capitalize">' + v.type + '</td>' +
       '<td>₹' + v.price.toLocaleString() + '</td>' +
       '<td>' + v.seats + '</td>' +
@@ -1131,7 +1184,7 @@ function loadVendorVehicles() {
     '</tr>';
   }).join('');
   $('#vVehiclesList').html(
-    '<table class="dtable"><thead><tr><th>Name</th><th>Type</th><th>Price/day</th><th>Seats</th><th>Insurance</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
+    '<table class="dtable"><thead><tr><th>Vehicle</th><th>Type</th><th>Price/day</th><th>Seats</th><th>Insurance</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
   );
 }
 
@@ -1170,70 +1223,92 @@ function handleInsuranceUpload(input) {
   reader.readAsDataURL(file);
 }
 
-/* ── VEHICLE IMAGES UPLOAD ── */
+/* ──────────────────────────────────────────
+   FIX: Vehicle Images Upload
+   upImgs now stores plain base64 strings.
+   renderImgPreviews() re-renders the preview
+   grid so removal is always index-accurate.
+────────────────────────────────────────── */
+function renderImgPreviews() {
+  var html = upImgs.map(function(dataUrl, idx) {
+    return '<div class="img-pitem" id="ip_' + idx + '">' +
+      '<img src="' + dataUrl + '" alt="Vehicle photo ' + (idx+1) + '"/>' +
+      '<button class="img-rm" onclick="removeImg(' + idx + ',event)" title="Remove"><i class="fas fa-times"></i></button>' +
+    '</div>';
+  }).join('');
+  $('#imgPrevs').html(html);
+  /* Update the upload box label with count */
+  var remaining = 5 - upImgs.length;
+  if (upImgs.length > 0) {
+    $('#imgUpBox').html('<i class="fas fa-cloud-upload-alt"></i> ' + upImgs.length + '/5 images added' + (remaining > 0 ? ' · Click to add more' : ' · Max reached'));
+  } else {
+    $('#imgUpBox').html('<i class="fas fa-cloud-upload-alt"></i> Upload up to 5 vehicle images');
+  }
+}
+
 function handleVehicleImages(input) {
   var files = Array.from(input.files || []);
   if (!files.length) return;
-  input.value = '';
-  /* FIX: Check current count against max of 5 per vehicle submission */
+  input.value = ''; /* reset so same file can be re-picked */
+
   if (upImgs.length >= 5) {
     showToast('Maximum 5 images allowed per vehicle.', 'err');
     return;
   }
+
   var remaining = 5 - upImgs.length;
   var toProcess = files.slice(0, remaining);
   if (files.length > remaining) {
     showToast('Only ' + remaining + ' more image(s) can be added (max 5 total).', 'inf');
   }
+
+  var loaded = 0;
   toProcess.forEach(function(f) {
-    if (!f.type.startsWith('image/')) { showToast('Only image files allowed', 'err'); return; }
-    if (f.size > 5 * 1024 * 1024)     { showToast('Each image must be under 5MB', 'err'); return; }
+    if (!f.type.startsWith('image/')) { showToast('Only image files allowed', 'err'); loaded++; return; }
+    if (f.size > 5 * 1024 * 1024)    { showToast('Each image must be under 5MB', 'err'); loaded++; return; }
+
     var reader = new FileReader();
-    var key = ++imgCounter;
-    reader.onerror = function() { showToast('Failed to read image', 'err'); };
+    reader.onerror = function() { showToast('Failed to read image', 'err'); loaded++; };
     reader.onload = function(ev) {
       var data = ev.target.result;
-      if (!data) return;
-      upImgs.push({ key: key, data: data });
-      $('#imgPrevs').append(
-        '<div class="img-pitem" id="ip_' + key + '">' +
-          '<img src="' + data + '" alt="Vehicle photo"/>' +
-          '<button class="img-rm" onclick="removeImg(' + key + ',event)"><i class="fas fa-times"></i></button>' +
-        '</div>'
-      );
+      if (data) {
+        upImgs.push(data); /* FIX: push plain string, not {key,data} object */
+        renderImgPreviews();
+      }
+      loaded++;
     };
     reader.readAsDataURL(f);
   });
 }
 
-function removeImg(key, e) {
+/* FIX: removeImg uses array index, re-renders all previews */
+function removeImg(idx, e) {
   if (e) e.stopPropagation();
-  upImgs = upImgs.filter(function(i) { return i.key !== key; });
-  $('#ip_' + key).remove();
+  if (idx < 0 || idx >= upImgs.length) return;
+  upImgs.splice(idx, 1);
+  renderImgPreviews(); /* re-render with updated indices */
 }
 
 /* ── RESET VENDOR ADD VEHICLE FORM ── */
-/* FIX: Extracted into a dedicated function so it's always called completely */
 function resetVehicleForm() {
   $('#vName').val('');
   $('#vPrice').val('');
   $('#vSeats').val('');
   $('#vDesc').val('');
   $('#vType').val('sedan');
-  /* Reset image previews */
-  $('#imgPrevs').empty();
+
   /* Reset image state */
   upImgs = [];
-  imgCounter = 0;
+  renderImgPreviews();
+
   /* Reset insurance */
   insDoc = null;
   $('#insPrev').html('<i class="fas fa-file-shield"></i><span>Upload Insurance Document</span><small>PDF or Image — Max 5MB</small>');
   $('#insStat').text('');
+
   /* Reset file inputs so same file can be re-selected */
   $('#carIns').val('');
   $('#vImgs').val('');
-  /* Reset image upbox label */
-  $('#imgUpBox').html('<i class="fas fa-cloud-upload-alt"></i> Upload up to 5 vehicle images');
 }
 
 /* ── ADD VEHICLE ── */
@@ -1248,12 +1323,13 @@ function addVehicle() {
     showToast('Please fill all fields', 'err');
     return;
   }
+  if (isNaN(price) || price < 1)  { showToast('Enter a valid daily rate', 'err'); return; }
+  if (isNaN(seats) || seats < 1)  { showToast('Enter a valid seat count', 'err'); return; }
 
   if (upImgs.length === 0) {
     showToast('Upload at least 1 vehicle image', 'err');
     return;
   }
-
   if (!insDoc) {
     showToast('Upload insurance document', 'err');
     return;
@@ -1271,18 +1347,27 @@ function addVehicle() {
     vendorId: CU.id,
     vendorName: CU.name,
     status: 'pending',
+    /* FIX: upImgs is now an array of plain base64 strings — directly usable as img src */
     images: upImgs.slice(),
     insurance: true,
+    trending: false,
+    rating: null,
+    bookings: 0,
     createdAt: new Date().toISOString()
   };
 
   vehicles.push(newVehicle);
   Store.set('vehicles', vehicles);
 
-  showToast('Vehicle added successfully! Awaiting admin approval', 'ok');
+  showToast('Vehicle "' + name + '" submitted! Awaiting admin approval.', 'ok');
 
-  /* ✅ RESET EVERYTHING PROPERLY */
+  /* Reset everything after successful submission */
   resetVehicleForm();
+
+  /* Navigate to My Vehicles to show the new entry */
+  setTimeout(function() {
+    showVendorTab('vVehicles', document.getElementById('vTab-vVehicles'));
+  }, 500);
 }
 
 function showVendorTab(id, el) {
@@ -1291,7 +1376,7 @@ function showVendorTab(id, el) {
   $('#tab-' + id).addClass('active');
   if (el) $(el).addClass('active');
   else $('#vTab-' + id).addClass('active');
-  /* FIX: Reset form state when navigating TO the Add Vehicle tab */
+  /* Reset form state when navigating TO the Add Vehicle tab */
   if (id === 'vAdd') {
     resetVehicleForm();
   }
